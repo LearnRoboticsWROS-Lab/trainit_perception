@@ -1,0 +1,20 @@
+# Parameter schema of the color_mask detector. The Setup Assistant renders its Vision
+# block form from this file, so a field added here shows up in the tuner.
+method: color_mask
+goal: locate
+gives_orientation: false        # centroid only -> top-down grasp with a fixed orientation
+label: Colour mask (HSV)
+description: >-
+  Threshold the image in HSV, keep the largest blob(s), take the centroid, read the
+  depth there and back-project it with the intrinsics. Simple, inspectable, teachable.
+
+params:
+  class_id:       {type: str,   default: object,     label: Class id (what the tree asks for)}
+  h:              {type: range, default: [170, 10],  min: 0, max: 179, label: Hue,
+                   note: "lo > hi WRAPS around 0 — that is how red is written"}
+  s:              {type: range, default: [120, 255], min: 0, max: 255, label: Saturation}
+  v:              {type: range, default: [60, 255],  min: 0, max: 255, label: Value}
+  min_area_px:    {type: int,   default: 60,   min: 1, max: 100000, label: Min blob area (px)}
+  max_objects:    {type: int,   default: 1,    min: 1, max: 20,     label: Max objects}
+  morph_kernel:   {type: int,   default: 3,    min: 0, max: 15,     label: Morphology kernel (0 = off)}
+  depth_window_px: {type: int,  default: 5,    min: 1, max: 15,     label: Depth median window (px)}
