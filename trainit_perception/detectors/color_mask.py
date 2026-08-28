@@ -30,7 +30,11 @@ class ColorMaskDetector(Detector):
             # RED is written: [170, 10] means 170..179 plus 0..10. Red straddles the
             # hue seam and a naive single range silently loses half of it.
             'h': [170, 10],
-            's': [120, 255],
+            # Saturation floor kept LOW on purpose. Measured on the Isaac cell under a
+            # dome light, the red cube renders at S = 62-72 out of 255 (bright and
+            # washed out); the theory default of 120 found NOTHING. A real painted
+            # object is far more saturated, so 40 is a floor that admits both.
+            's': [40, 255],
             'v': [60, 255],
             'min_area_px': 60,
             'max_objects': 1,

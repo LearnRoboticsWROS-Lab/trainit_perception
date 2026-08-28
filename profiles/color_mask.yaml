@@ -12,7 +12,8 @@ params:
   class_id:       {type: str,   default: object,     label: Class id (what the tree asks for)}
   h:              {type: range, default: [170, 10],  min: 0, max: 179, label: Hue,
                    note: "lo > hi WRAPS around 0 — that is how red is written"}
-  s:              {type: range, default: [120, 255], min: 0, max: 255, label: Saturation}
+  s:              {type: range, default: [40, 255],  min: 0, max: 255, label: Saturation,
+                   note: "keep the floor low: under a flat sim light a red object measured S 62-72"}
   v:              {type: range, default: [60, 255],  min: 0, max: 255, label: Value}
   min_area_px:    {type: int,   default: 60,   min: 1, max: 100000, label: Min blob area (px)}
   max_objects:    {type: int,   default: 1,    min: 1, max: 20,     label: Max objects}
