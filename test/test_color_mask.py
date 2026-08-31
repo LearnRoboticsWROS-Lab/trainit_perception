@@ -118,3 +118,60 @@ def test_message_builder():
     assert r.pose.pose.position.z == pytest.approx(Z)
     assert r.pose.pose.orientation.w == 1.0
     assert msg.detections[0].bbox.size.x == pytest.approx(0.020, abs=0.002)
+
+
+# --- noise filters (D-015) -----------------------------------------------------------
+
+def test_filters_off_by_default_change_nothing():
+    """The proof-1/2 tuning must be byte-identical with the new params at defaults."""
+    rgb, depth = frame()
+    base = ColorMaskDetector({'class_id': 'cube'})
+    explicit = ColorMaskDetector({'class_id': 'cube', 'blur_px': 0,
+                                  'depth_min_m': 0.0, 'depth_max_m': 0.0})
+    assert np.array_equal(base.mask(rgb, depth), explicit.mask(rgb, depth))
+    a, b = base.detect(rgb, depth, K), explicit.detect(rgb, depth, K)
+    assert a[0].position == b[0].position and a[0].area_px == b[0].area_px
+
+
+def test_gaussian_blur_kills_single_pixel_noise_the_morphology_misses():
+    rgb, depth = frame()
+    # salt the image with lone red pixels; morphology off so only the blur can help
+    rng = np.random.default_rng(7)
+    for _ in range(200):
+        u, v = int(rng.integers(0, 848)), int(rng.integers(0, 480))
+        rgb[v, u] = (200, 10, 10)
+    noisy = ColorMaskDetector({'morph_kernel': 0, 'min_area_px': 1})
+    blurred = ColorMaskDetector({'morph_kernel': 0, 'min_area_px': 1, 'blur_px': 5})
+    assert len(noisy.detect(rgb, depth, K)) == 1          # max_objects=1: biggest blob
+    n_noisy = int((noisy.mask(rgb) > 0).sum())
+    n_blur = int((blurred.mask(rgb) > 0).sum())
+    assert n_blur < n_noisy                               # blur melts the salt away
+    d = blurred.detect(rgb, depth, K)
+    assert len(d) == 1 and d[0].area_px > 200             # the cube survives
+
+
+def test_even_blur_kernel_is_rounded_up_not_crashed():
+    rgb, depth = frame()
+    det = ColorMaskDetector({'blur_px': 4})               # cv2 would reject an even kernel
+    assert len(det.detect(rgb, depth, K)) == 1
+
+
+def test_depth_passthrough_cuts_a_red_object_outside_the_band():
+    # two identical red squares; the far one sits on a deeper plane
+    rgb, depth = frame(extra=[(100, 100, CUBE_PX, (140, 13, 15))])
+    depth[100:100 + CUBE_PX, 100:100 + CUBE_PX] = 1.20    # background object
+    wide = ColorMaskDetector({'max_objects': 2})
+    banded = ColorMaskDetector({'max_objects': 2, 'depth_min_m': 0.3, 'depth_max_m': 0.6})
+    assert len(wide.detect(rgb, depth, K)) == 2
+    d = banded.detect(rgb, depth, K)
+    assert len(d) == 1 and abs(d[0].position[2] - Z) < 1e-6
+
+
+def test_depth_passthrough_keeps_holes_for_the_centroid_rescue():
+    rgb, depth = frame()
+    depth[300:318, 500:518] = 0.0                         # the whole cube is a depth hole
+    depth[309, 509] = Z                                   # one valid pixel inside the window
+    det = ColorMaskDetector({'depth_min_m': 0.3, 'depth_max_m': 0.6,
+                             'depth_window_px': 21})
+    d = det.detect(rgb, depth, K)
+    assert len(d) == 1                                    # holes not cut from the mask

@@ -40,11 +40,21 @@ class ColorMaskDetector(Detector):
             'max_objects': 1,
             'morph_kernel': 3,          # 0 = off. Removes speckle, closes small gaps.
             'depth_window_px': 5,
-        }
+            # -- noise filters (D-015). All default to OFF so the proof-1/2 tuning is
+            #    byte-identical without them. They run INSIDE the pure function, so the
+            #    TSA live tuner and the runtime node apply exactly the same filtering.
+            'blur_px': 0,               # 0 = off. Gaussian blur kernel (odd; evens rounded up).
+            'depth_min_m': 0.0,         # pass-through band on the DEPTH image: pixels whose
+            'depth_max_m': 0.0,         # depth is outside [min, max) are cut from the mask.
+        }                               # depth_max_m 0 = off. Kills background/foreground noise.
 
     # --- the mask, exposed on its own so the tuner can show it ----------------------
-    def mask(self, rgb: np.ndarray) -> np.ndarray:
+    def mask(self, rgb: np.ndarray, depth_m: np.ndarray | None = None) -> np.ndarray:
         p = self.params
+        b = int(p['blur_px'])
+        if b > 0:
+            b += 1 - (b % 2)                             # cv2 wants an odd kernel
+            rgb = cv2.GaussianBlur(rgb, (b, b), 0)
         hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)      # rgb8 in, hence RGB2HSV not BGR
         h_lo, h_hi = int(p['h'][0]), int(p['h'][1])
         s_lo, s_hi = int(p['s'][0]), int(p['s'][1])
@@ -59,14 +69,22 @@ class ColorMaskDetector(Detector):
             kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
             m = cv2.morphologyEx(m, cv2.MORPH_OPEN, kernel)
             m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, kernel)
+        # depth pass-through AFTER morphology: geometry is not speckle. A depth hole
+        # (0/nan) inside the band is KEPT — depth_at() already rescues holes at the
+        # centroid, and cutting holes here would punch the mask full of gaps.
+        z_lo, z_hi = float(p['depth_min_m']), float(p['depth_max_m'])
+        if z_hi > 0.0 and depth_m is not None:
+            d = np.nan_to_num(depth_m, nan=0.0, posinf=0.0, neginf=0.0)
+            in_band = (d >= z_lo) & (d < z_hi)
+            m = m & np.where(in_band | (d <= 0.0), np.uint8(255), np.uint8(0))
         return m
 
-    def debug_mask(self, rgb: np.ndarray):
-        return self.mask(rgb)
+    def debug_mask(self, rgb: np.ndarray, depth_m: np.ndarray | None = None):
+        return self.mask(rgb, depth_m)
 
     def detect(self, rgb: np.ndarray, depth_m: np.ndarray, K: np.ndarray) -> List[Detection]:
         p = self.params
-        m = self.mask(rgb)
+        m = self.mask(rgb, depth_m)
         # Connected components, not contours: cv2.contourArea() measures the polygon
         # through pixel CENTRES and under-reads small blobs by a full ring of pixels
         # (an 18 px square comes out at 287, not 324 -- 11% low). At the sizes this

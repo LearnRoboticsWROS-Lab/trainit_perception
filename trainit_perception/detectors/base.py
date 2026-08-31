@@ -49,8 +49,11 @@ class Detector(ABC):
         """rgb: HxWx3 uint8 (RGB order). depth_m: HxW float32 METRES, 0/nan = no data.
         K: 3x3 intrinsics of the rgb image, which the depth must be registered to."""
 
-    def debug_mask(self, rgb: np.ndarray) -> Optional[np.ndarray]:
-        """HxW uint8 mask for the tuner / a debug topic. None if not applicable."""
+    def debug_mask(self, rgb: np.ndarray,
+                   depth_m: Optional[np.ndarray] = None) -> Optional[np.ndarray]:
+        """HxW uint8 mask for the tuner / a debug topic. None if not applicable.
+        depth_m is optional so image-only callers keep working; detectors with a
+        depth pass-through filter use it when given."""
         return None
 
 

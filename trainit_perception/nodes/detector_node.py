@@ -133,7 +133,7 @@ class DetectorNode(Node):
         # frame: the OPTICAL frame of the colour camera. The consumer transforms.
         self.pub.publish(to_detection3d_array(dets, self.frame_id, stamp))
         if self.pub_mask is not None:
-            m = self.detector.debug_mask(rgb)
+            m = self.detector.debug_mask(rgb, depth_m)
             if m is not None:
                 out = self.bridge.cv2_to_imgmsg(m, encoding='mono8')
                 out.header.stamp, out.header.frame_id = stamp, self.frame_id

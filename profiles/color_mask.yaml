@@ -19,3 +19,9 @@ params:
   max_objects:    {type: int,   default: 1,    min: 1, max: 20,     label: Max objects}
   morph_kernel:   {type: int,   default: 3,    min: 0, max: 15,     label: Morphology kernel (0 = off)}
   depth_window_px: {type: int,  default: 5,    min: 1, max: 15,     label: Depth median window (px)}
+  # noise filters (D-015) — defaults are OFF so an untouched profile behaves as before
+  blur_px:        {type: int,   default: 0,    min: 0, max: 31,     label: Gaussian blur (px, 0 = off),
+                   note: "pre-mask smoothing; melts single-pixel colour noise the morphology misses"}
+  depth_min_m:    {type: float, default: 0.0,  min: 0.0, max: 10.0, label: Depth band min (m)}
+  depth_max_m:    {type: float, default: 0.0,  min: 0.0, max: 10.0, label: Depth band max (m, 0 = off),
+                   note: "pass-through on the depth image: mask pixels outside [min, max) are cut; depth holes are kept"}
