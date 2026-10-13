@@ -1,5 +1,7 @@
-# Parameter schema of the color_mask detector. The Setup Assistant renders its Vision
-# block form from this file, so a field added here shows up in the tuner.
+# The color_mask detector's parameters, documented for a reader. The schema itself is code --
+# ColorMaskDetector.PARAMETERS and defaults() -- exported by trainit_perception.vocabulary.export()
+# and committed by the Setup Assistant as a snapshot (ADR-0021); test_vocabulary.py holds this
+# file to it, so a field added here without the code (or the other way round) fails a test.
 method: color_mask
 goal: locate
 gives_orientation: false        # centroid only -> top-down grasp with a fixed orientation
@@ -25,3 +27,63 @@ params:
   depth_min_m:    {type: float, default: 0.0,  min: 0.0, max: 10.0, label: Depth band min (m)}
   depth_max_m:    {type: float, default: 0.0,  min: 0.0, max: 10.0, label: Depth band max (m, 0 = off),
                    note: "pass-through on the depth image: mask pixels outside [min, max) are cut; depth holes are kept"}
+
+  # --- the candidate ranking (ADR-0014, ADR-0016 Decision 1, ADR-0017) ----------------------
+  # THE PUBLISHED ORDER OF THE DETECTIONS IS THE RANKING. This is the only parameter that decides
+  # it, and the per-candidate terms go out on /perception/<name>/quality in the same permutation
+  # whatever it says. A rule whose terms this detector cannot compute STOPS THE NODE at start-up:
+  # an order that is not the ranking that was asked for looks exactly like a perception fault,
+  # which is the expensive kind of mistake.
+  candidate_rule: {type: str, default: auto, label: Candidate rule (decides the ORDER),
+                   choices: [auto, detector_order, score, score_x_visible, score_x_nonoverlap],
+                   note: "auto = the best rule this detector can compute, which is
+                     score_x_visible once a face radius is set and score_x_nonoverlap without one.
+                     detector_order = largest blob first, the pre-ADR-0017 behaviour, and an
+                     EXPLICIT choice rather than a silent fallback. score_x_visible needs
+                     expected_radius_m > 0 and is refused without it. With max_objects: 1 every
+                     rule publishes the same single detection."}
+  # THE FACE'S OWN PARAMETERS ARE THE REGISTRY'S TO DECLARE, not this file's (ADR-0018
+  # Decision 6). `trainit_perception.ranking.face_schema(name)` returns the parameters a face
+  # reads, the extent terms it produces and the candidate terms it unlocks; `available_faces()`
+  # returns the choices below and `ranking_defaults(PROVIDES, grasp_face=name)` returns the keys
+  # to write. The rows here document them for a reader -- a configurator that renders them from
+  # this list instead of from the registry is the asymmetry the decision closes, and it was
+  # verified: a hand-written `rect` face was accepted by the runtime and refused by the wizard.
+  # ONLY THE CONFIGURED FACE'S PARAMETERS ARE READ. The others are inert, and 0 means UNKNOWN
+  # everywhere: the term that needs the size is then not computable and the rule is refused.
+  grasp_face:     {type: str, default: disc, choices: [disc, rect, cylinder_side],
+                   label: Grasp face,
+                   note: "the shape the tool meets, NOT the object: a bottle picked from above is
+                     a disc of the CAP's radius, and the same bottle picked from the side is a
+                     cylinder_side of the BODY's. disc -> expected_radius_m; rect ->
+                     expected_half_a_m + expected_half_b_m; cylinder_side -> expected_radius_m +
+                     expected_height_m. Ask face_schema(); do not keep a copy of this list."}
+  expected_radius_m: {type: float, default: 0.0, min: 0.0, max: 1.0,
+                   label: "Face radius (m, 0 = unknown) — disc, cylinder_side",
+                   note: "the radius of the face the tool comes down on. It is what
+                     visible_fraction divides by -- the mask's area against pi*(f*r/z)^2 -- so
+                     with 0 the term cannot be computed and any rule that needs it is refused.
+                     MEASURED on the object, not approximated from its bounding box: for a capsule
+                     with a pull tab the AABB's sqrt(x*y/pi) gives 28,10 mm against a true 20,95 mm,
+                     which is +80 % on the AREA this term divides by (ADR-0018 Decision 1)."}
+  expected_half_a_m: {type: float, default: 0.0, min: 0.0, max: 1.0,
+                   label: "Face half-extent A (m, 0 = unknown) — rect",
+                   note: "half the first side of a RECTANGULAR face. A and B are interchangeable:
+                     a plane fit's two in-plane axes come out of an SVD and carry no labels, so
+                     the comparison sorts and entering 15 and 10 mm or 10 and 15 mm is the same."}
+  expected_half_b_m: {type: float, default: 0.0, min: 0.0, max: 1.0,
+                   label: "Face half-extent B (m, 0 = unknown) — rect",
+                   note: "half the other side. BOTH are needed -- one side of a rectangle is not
+                     a size, so with either at 0 the face is as unknown as with neither set."}
+  expected_height_m: {type: float, default: 0.0, min: 0.0, max: 1.0,
+                   label: "Cylinder band height (m, 0 = unknown) — cylinder_side",
+                   note: "the length of the cylindrical band THE DETECTOR'S MASK COVERS, which
+                     is the body's height for a segmenter that returns the whole body and the
+                     band's for one that returns a label. The expected area is the silhouette,
+                     2r by h projected, and it survives the roll about the cylinder's own axis.
+                     cylinder_side produces NO extent terms: a plane fit measures the RANSAC
+                     band (11,40 mm on a 32,5 mm bottle), not the radius, so nothing is gated on
+                     until a cylinder FIT exists (ADR-0018)."}
+  # A unit error here does not raise on its own -- a metres field holding millimetres just makes
+  # visible_fraction a constant -- so a size outside 0,1 mm .. 1 m is REFUSED at start-up
+  # (ADR-0018 Decision 4). 0 stays the honest "unknown".

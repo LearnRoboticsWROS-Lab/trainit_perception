@@ -8,6 +8,13 @@ wide -- plenty for a centroid, not enough for an orientation from the image. So 
 detection carries a position and a SIZE, and an identity orientation. A top-down
 suction grasp needs nothing more; a 6-DoF grasp needs a different method (fiducial,
 learned model) through the same contract.
+
+It RANKS what it finds. With `max_objects` > 1 the published order is the candidate
+ranking (ADR-0016 Decision 1), by the `candidate_rule` parameter: with no
+`expected_radius_m` set it ranks by solidity against box overlap, and with the face's
+radius set it ranks by how much of the face the mask actually shows -- the measured
+winner. Before ADR-0017 the array went out largest-blob first, which is `max_objects:
+1` unchanged and a different order for anything above it.
 """
 from __future__ import annotations
 
@@ -16,15 +23,42 @@ from typing import List
 import cv2
 import numpy as np
 
+from ..ranking.rules import PROVIDES_BOX, PROVIDES_MASK_AREA, PROVIDES_SCORE
 from .base import Detection, Detector, back_project, depth_at, pixel_extent_to_metres
 
 
 class ColorMaskDetector(Detector):
     method = 'color_mask'
+    # A mask (so its area can be measured against the face's own) and a pixel box (so the frame's
+    # boxes can be judged against each other). No 3D fit: the depth is read at one centroid, which
+    # is a position and not a surface -- so `pose_quality` and `clearance` are NOT computable here
+    # and a rule that needs them is refused at start-up rather than silently ignored.
+    PROVIDES = frozenset({PROVIDES_SCORE, PROVIDES_MASK_AREA, PROVIDES_BOX})
+
+    # The configuration SCHEMA of this method's OWN parameters -- what a configurator may offer and
+    # accept (vNext M2.2, ADR-0021): read by `trainit_perception.vocabulary.export()`, never by the
+    # detector. The values are `defaults()`; profiles/color_mask.yaml documents both for a reader,
+    # and test_vocabulary.py holds the three together. `since` dates a parameter newer than the
+    # first release, so a configurator pins the runtime that reads it: the D-015 noise filters
+    # arrived in 0.2.0, and an older node would merge them into its params and ignore them.
+    PARAMETERS = {
+        'class_id': {'type': 'str'},
+        'h': {'type': 'range', 'min': 0, 'max': 179},
+        's': {'type': 'range', 'min': 0, 'max': 255},
+        'v': {'type': 'range', 'min': 0, 'max': 255},
+        'min_area_px': {'type': 'int', 'min': 1, 'max': 100000},
+        'max_objects': {'type': 'int', 'min': 1, 'max': 20},
+        'morph_kernel': {'type': 'int', 'min': 0, 'max': 15},
+        'depth_window_px': {'type': 'int', 'min': 1, 'max': 15},
+        'blur_px': {'type': 'int', 'min': 0, 'max': 31, 'since': '0.2.0'},
+        'depth_min_m': {'type': 'float', 'min': 0.0, 'max': 10.0, 'since': '0.2.0'},
+        'depth_max_m': {'type': 'float', 'min': 0.0, 'max': 10.0, 'since': '0.2.0'},
+    }
 
     @classmethod
     def defaults(cls) -> dict:
         return {
+            **cls.ranking_defaults(),
             'class_id': 'object',
             # OpenCV hue is 0-179. A range with lo > hi WRAPS around 0, which is how a
             # RED is written: [170, 10] means 170..179 plus 0..10. Red straddles the
@@ -107,10 +141,14 @@ class ColorMaskDetector(Detector):
             fill = float(area) / float(max(1, w * h))
             fx, fy = K[0, 0], K[1, 1]
             size = (pixel_extent_to_metres(w, z, fx), pixel_extent_to_metres(h, z, fy), 0.0)
+            x0, y0 = int(stats[i, cv2.CC_STAT_LEFT]), int(stats[i, cv2.CC_STAT_TOP])
             out.append(Detection(
                 class_id=str(p['class_id']), score=min(1.0, fill),
                 position=back_project(u, v, z, K), size=size,
                 pixel=(u, v), area_px=int(area),
+                # the connected component's own box, exact to the pixel: `box_overlap` is the one
+                # occlusion term that needs no mask and no depth, and this is all it needs
+                box_px=(float(x0), float(y0), float(x0 + w), float(y0 + h)),
                 extra={'bbox_px': float(max(w, h))},
             ))
         return out

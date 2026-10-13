@@ -2,12 +2,19 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>trainit_perception</name>
-  <version>0.2.0</version>
+  <version>0.5.0</version>
   <description>
     TrainIt perception: detectors that turn the camera contract (image + depth +
     intrinsics) into the perception contract (vision_msgs/Detection3DArray). Each
     detector is a pure function, so the Setup Assistant's live tuner and the runtime
-    node execute the same code.
+    node execute the same code. It also ranks: the published ORDER of the detections is
+    the candidate ranking, computed from closed-form perception terms a person can argue
+    with (ADR-0014, ADR-0016, ADR-0017). The grasp FACE is the pluggable shape and
+    it declares what configures it, so a new face family is one class and no
+    second repo (ADR-0018). The configuration vocabulary -- methods, rules, terms,
+    faces, parameter schema, version floors -- is exported by
+    trainit_perception.vocabulary.export(); the Setup Assistant commits a snapshot
+    of it and never imports this package while it generates (ADR-0021).
   </description>
   <maintainer email="ros.master.ai@gmail.com">fra</maintainer>
   <license>Apache-2.0</license>
@@ -16,6 +23,7 @@
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>vision_msgs</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
   <exec_depend>std_srvs</exec_depend>
   <exec_depend>cv_bridge</exec_depend>
   <exec_depend>message_filters</exec_depend>

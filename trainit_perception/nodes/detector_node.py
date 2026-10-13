@@ -5,9 +5,17 @@ It loads ONE detector by name from a perception.yaml (the file the Setup Assista
 generates into the bundle's _app/config), subscribes to the camera contract, runs the
 detector, and publishes the perception contract:
 
-    /perception/<name>/detections   vision_msgs/Detection3DArray   RELIABLE, depth 1
+    /perception/<name>/detections   vision_msgs/Detection3DArray   RELIABLE, depth 1, BEST FIRST
+    /perception/<name>/quality      std_msgs/String (JSON)         RELIABLE, depth 1, ADDITIVE
     /perception/<name>/mask         sensor_msgs/Image (mono8)      BEST_EFFORT, debug
     /perception/<name>/detect       std_srvs/Trigger               one detection on demand
+
+THE ORDER IS THE RANKING (ADR-0016 Decision 1): the array goes out best first by the detector's
+configured ``candidate_rule``, and ``/quality`` carries the per-candidate terms in the SAME
+permutation, paired with the detections by ``header.stamp``. A consumer that takes
+``detections[0]`` gets the configured candidate with nothing extra to subscribe to; a consumer
+that wants the second takes ``detections[1]``, which is what makes "try the next one" an index
+(ADR-0016 Decision 2) instead of a program.
 
 Continuous by default: a colour mask at camera rate costs nothing, and the consumer
 (TMR's DetectObject) waits for a message FRESHER than its own tick, so it never acts
@@ -38,11 +46,12 @@ from message_filters import ApproximateTimeSynchronizer, Subscriber
 from rclpy.node import Node
 from rclpy.qos import QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
 from sensor_msgs.msg import CameraInfo, Image
+from std_msgs.msg import String
 from std_srvs.srv import Trigger
 from vision_msgs.msg import Detection3DArray
 
 from trainit_perception.detectors import depth_to_metres, make_detector
-from trainit_perception.msgs import to_detection3d_array
+from trainit_perception.msgs import to_detection3d_array, to_quality_json
 
 SENSOR_QOS = QoSProfile(reliability=QoSReliabilityPolicy.BEST_EFFORT,
                         history=QoSHistoryPolicy.KEEP_LAST, depth=2)
@@ -71,6 +80,9 @@ class DetectorNode(Node):
             raise RuntimeError(f'{cfg_path}: no detectors.{name} (have: {list((cfg.get("detectors") or {}))})')
 
         self.name = name
+        # A `candidate_rule` whose terms this detector cannot compute raises HERE and the node
+        # stops (ADR-0017 Decision 3): since the published ORDER is the ranking, a rule nobody
+        # computes must not be allowed to mean "whatever order the detector returned".
         self.detector = make_detector(entry['method'], entry.get('params') or {})
         inp = entry.get('input') or {}
         rgb_t = inp.get('rgb', '/camera/color/image_raw')
@@ -96,6 +108,9 @@ class DetectorNode(Node):
 
         base = f'/perception/{name}'
         self.pub = self.create_publisher(Detection3DArray, f'{base}/detections', DETECTION_QOS)
+        # ADDITIVE: the candidate terms, which `vision_msgs` has nowhere to put. A separate topic
+        # keeps the standard message standard, and a consumer that does not care never sees it.
+        self.pub_quality = self.create_publisher(String, f'{base}/quality', DETECTION_QOS)
         self.pub_mask = (self.create_publisher(Image, f'{base}/mask', SENSOR_QOS)
                          if self.publish_mask else None)
         self.create_service(Trigger, f'{base}/detect', self._on_trigger)
@@ -103,6 +118,7 @@ class DetectorNode(Node):
         self.get_logger().info(
             f"detector '{name}' method={entry['method']} params={self.detector.params} "
             f"-> {base}/detections  ({'continuous' if self.continuous else 'on demand'})")
+        self.get_logger().info(self.detector.ranker.describe())
 
     # --- inputs ---------------------------------------------------------------------
     def _on_info(self, msg: CameraInfo):
@@ -129,9 +145,20 @@ class DetectorNode(Node):
             if self.latest is None:
                 return None
             rgb, depth_m, stamp = self.latest
-        dets = self.detector.detect(rgb, depth_m, self.K)
+        try:
+            # BEST FIRST, with the terms on each detection's `extra`. One permutation, applied to
+            # the detections and to the terms that describe them.
+            dets = self.detector.detect_ranked(rgb, depth_m, self.K)
+        except ValueError as exc:
+            # A term went missing on this frame, so no ranking could be computed. PUBLISH NOTHING:
+            # an array in the detector's own order under the name of a ranking is the failure
+            # ADR-0016 Decision 1 exists to prevent, and it looks like a perception fault.
+            self.get_logger().error(f'frame not published: {exc}', throttle_duration_sec=5.0)
+            self.last_pub = time.monotonic()
+            return None
         # frame: the OPTICAL frame of the colour camera. The consumer transforms.
         self.pub.publish(to_detection3d_array(dets, self.frame_id, stamp))
+        self.pub_quality.publish(String(data=to_quality_json(dets, self.frame_id, stamp)))
         if self.pub_mask is not None:
             m = self.detector.debug_mask(rgb, depth_m)
             if m is not None:

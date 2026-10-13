@@ -13,7 +13,7 @@ Two KINDS of method exist (D-015):
 """
 from __future__ import annotations
 
-from typing import Dict, Type
+from typing import Dict, Optional, Tuple, Type
 
 from .base import Detector
 from .color_mask import ColorMaskDetector
@@ -26,6 +26,13 @@ _REGISTRY: Dict[str, Type[Detector]] = {
 EXTERNAL_METHODS: Dict[str, str] = {
     'pcl_cluster': 'C++ PCL pointcloud clustering node (roadmap)',
 }
+
+# The methods THIS package ships, by kind, captured before anything can extend the tables above:
+# what `trainit_perception.vocabulary.export()` reads (ADR-0021, vNext M2.2). A method added to
+# them at run time is not part of the configuration vocabulary a configurator commits.
+BUILTIN_METHODS: Tuple[Tuple[str, str, Optional[Type[Detector]]], ...] = (
+    tuple((name, 'pure_python', cls) for name, cls in _REGISTRY.items())
+    + tuple((name, 'external_node', None) for name in EXTERNAL_METHODS))
 
 
 def available_methods():
