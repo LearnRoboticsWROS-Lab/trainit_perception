@@ -177,3 +177,7 @@ with. A colour mask runs no 3D fit, so `pose_quality` is not computable for it a
 rule that needs one is refused rather than ignored.
 
 Design: `fr3wml_digital_twin/docs/design_perception_integration.md`.
+
+## Licence
+
+Apache-2.0: [`LICENSE`](LICENSE).
