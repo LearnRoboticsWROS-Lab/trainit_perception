@@ -117,6 +117,13 @@ class ColorMaskDetector(Detector):
         return self.mask(rgb, depth_m)
 
     def detect(self, rgb: np.ndarray, depth_m: np.ndarray, K: np.ndarray) -> List[Detection]:
+        # a detection needs a position: a component whose centroid has no depth is dropped HERE (it was before)
+        return [d for d in self.components(rgb, depth_m, K) if d.position is not None]
+
+    def components(self, rgb: np.ndarray, depth_m: np.ndarray, K: np.ndarray) -> List[Detection]:
+        """Every component `detect` considers, largest first, up to `max_objects` -- INCLUDING one whose centroid
+        has no depth (its `position` is None). A surface-grasp provider fits on the component's own pixels, so it
+        must see that component and REJECT it explicitly (INSUFFICIENT_DEPTH), never lose it (vNext M4 review)."""
         p = self.params
         m = self.mask(rgb, depth_m)
         # Connected components, not contours: cv2.contourArea() measures the polygon
@@ -133,15 +140,19 @@ class ColorMaskDetector(Detector):
         for area, i in blobs[: int(p['max_objects'])]:
             u, v = float(centroids[i][0]), float(centroids[i][1])
             z = depth_at(depth_m, u, v, int(p['depth_window_px']))
-            if not np.isfinite(z) or z <= 0.0:
-                continue                                  # a hole with no rescue: skip it
             w, h = int(stats[i, cv2.CC_STAT_WIDTH]), int(stats[i, cv2.CC_STAT_HEIGHT])
+            x0, y0 = int(stats[i, cv2.CC_STAT_LEFT]), int(stats[i, cv2.CC_STAT_TOP])
+            if not np.isfinite(z) or z <= 0.0:            # a hole with no rescue: no position (detect drops it)
+                out.append(Detection(class_id=str(p['class_id']), score=min(1.0, float(area) / float(max(1, w * h))),
+                                     position=None, pixel=(u, v), area_px=int(area),
+                                     box_px=(float(x0), float(y0), float(x0 + w), float(y0 + h)),
+                                     extra={'bbox_px': float(max(w, h))}, mask=(labels == i)))
+                continue
             # score: how SOLID the blob is. A top-down cube is a filled square (~1.0);
             # speckle and partial occlusions score lower. Cheap and honest.
             fill = float(area) / float(max(1, w * h))
             fx, fy = K[0, 0], K[1, 1]
             size = (pixel_extent_to_metres(w, z, fx), pixel_extent_to_metres(h, z, fy), 0.0)
-            x0, y0 = int(stats[i, cv2.CC_STAT_LEFT]), int(stats[i, cv2.CC_STAT_TOP])
             out.append(Detection(
                 class_id=str(p['class_id']), score=min(1.0, fill),
                 position=back_project(u, v, z, K), size=size,
@@ -150,5 +161,7 @@ class ColorMaskDetector(Detector):
                 # occlusion term that needs no mask and no depth, and this is all it needs
                 box_px=(float(x0), float(y0), float(x0 + w), float(y0 + h)),
                 extra={'bbox_px': float(max(w, h))},
+                # the component's own pixels: what a surface-grasp provider fits on (vNext M4)
+                mask=(labels == i),
             ))
         return out

@@ -1,7 +1,9 @@
 # TrainIt perception
 
 Detectors that turn the camera contract into the perception contract
-(`vision_msgs/Detection3DArray`).
+(`vision_msgs/Detection3DArray`), and — since 0.6.0 — the **SurfaceGrasp** grasp provider
+that turns the measured surface into the canonical manipulation contract
+(`trainit_interfaces/GraspCandidateArray`, ADR-0026).
 
 ```
 contracts/perception.md      what a detector exposes — consumers depend on this only
@@ -9,8 +11,12 @@ profiles/<method>.yaml       each detector's parameters, documented (the schema 
 trainit_perception/
   detectors/                 PURE FUNCTIONS: (rgb, depth, K, params) -> [Detection]
   ranking/                   WHICH one to pick: the terms, the 3D fit, the grasp face, the rule
+  grasp/                     SurfaceGrasp: regions + registered depth -> ranked, constrained grasp
+                             candidates and explicit rejection codes (pure; + the camera model)
+  grasp_msgs.py              GraspCandidateArray / diagnostics JSON / markers
   vocabulary.py              the CONFIGURATION VOCABULARY, exported for the Setup Assistant
-  nodes/detector_node.py     the one ROS node: loads a detector from perception.yaml
+  nodes/detector_node.py     loads a detector from perception.yaml -> detections
+  nodes/surface_grasp_node.py  loads a surface_grasp entry -> grasp candidates
 scripts/score_term.py        scores a term against EXTERNAL labels — a term ships with it
 ```
 
@@ -181,3 +187,66 @@ Design: `fr3wml_digital_twin/docs/design_perception_integration.md`.
 ## Licence
 
 Apache-2.0: [`LICENSE`](LICENSE).
+
+## SurfaceGrasp — a grasp provider (0.6.0)
+
+`surface_grasp_node` serves one `perception.yaml` entry with `method: surface_grasp`:
+
+```yaml
+detectors:
+  parts_grasp:
+    method: surface_grasp
+    input: {rgb: /camera/color/image_raw, depth: /camera/depth/image_rect_raw,
+            camera_info: /camera/color/camera_info, depth_camera_info: /camera/depth/camera_info}
+    segmentation: {method: color_mask, params: {class_id: part, h: [170, 10], max_objects: 20}}
+    params:
+      eef: main                 # REQUIRED: the end effector and grasp site the candidates are for
+      site: suction
+      contact_radius_m: 0.009   # REQUIRED: the contact the site needs on the surface (the cup's seal)
+      approach_cone_deg: 45.0   # REQUIRED: the allowed approach cone, about approach_cone_axis
+      standoff_m: 0.05          # REQUIRED: the suggested PreGrasp distance, in [standoff_min_m, standoff_max_m]
+    continuous: false           # on demand through /perception/parts_grasp/detect
+```
+
+Every candidate is a TOOL placement on a measured plane for that one eef / site: contact point, observer-facing
+normal, approach = -normal, a full orientation whose +Z is the approach, the standoff, the score as the product of
+its terms and the fit's quality as its confidence. What cannot be a valid candidate is a coded rejection on
+`grasp_diagnostics`, never a candidate. The contract: `contracts/perception.md`, "Grasp candidates".
+
+## M4.5 additions (0.7.0): an external segmenter, a workspace, a scripted provider
+
+**`instance_topic` segmentation.** SurfaceGrasp can fit on the instances of ANY external segmenter (a YOLO-seg
+node, Mask R-CNN, SAM) published as `/perception/<source>/instances` (16UC1, 0 = background, k = instance k) +
+`/perception/<source>/instance_info` (Detection2DArray, `id` = k), stamped with the colour image:
+
+```yaml
+    segmentation:
+      method: instance_topic
+      params: {source: yolo, classes: [capsule], min_score: 0.5, max_objects: 20, min_area_px: 150}
+```
+
+**Workspace eligibility.** A pixel polygon (and an optional depth band) keeps regions outside the bin out of the
+provider; they are listed `ineligible` / `OUTSIDE_WORKSPACE` on the diagnostics, never rejected:
+
+```yaml
+    eligibility: {roi_px: [[120, 80], [520, 80], [520, 400], [120, 400]], min_inside: 0.9,
+                  z_min_m: 0.3, z_max_m: 0.9}
+```
+
+**`scripted_grasp_node` (`tp.scripted`).** Mock product tests: candidates from a scenario file, one step per
+capture Trigger (candidates, an empty answer, `unavailable`, a stale stamp, a delay):
+
+```yaml
+detectors:
+  part_grasp:
+    method: scripted_grasp
+    params: {scenario_file: /abs/scenario.yaml, frame_id: camera_color_optical_frame, after_end: empty}
+```
+
+**Objects present (M4.5b).** With every candidate array a grasp provider also publishes
+`/perception/<name>/objects` (`vision_msgs/Detection3DArray`, the same header): one object per ELIGIBLE region
+whatever its grasp verdict, so an application can tell an empty bin from parts no grasp can serve (TSA's
+`repeat: {until: nothing_to_pick, presence: <name>}`). The scripted provider publishes a step's `objects`.
+
+The contracts: `contracts/perception.md`, "Objects present", "Instance segmentation", "Workspace eligibility", "The
+scripted grasp provider".

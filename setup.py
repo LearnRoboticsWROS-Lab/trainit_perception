@@ -7,7 +7,7 @@ package_name = 'trainit_perception'
 
 setup(
     name=package_name,
-    version='0.5.0',
+    version='0.8.0',
     packages=find_packages(exclude=['test']),
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
@@ -22,7 +22,7 @@ setup(
     zip_safe=True,
     maintainer='fra',
     maintainer_email='ros.master.ai@gmail.com',
-    description='TrainIt perception: ranked detectors emitting vision_msgs/Detection3DArray.',
+    description='TrainIt perception: ranked detectors (vision_msgs/Detection3DArray) and the grasp providers SurfaceGrasp and Scripted (trainit_interfaces/GraspCandidateArray).',
     license='Apache-2.0',
     tests_require=['pytest'],
     entry_points={
@@ -30,6 +30,8 @@ setup(
             # A console_script, never an install(PROGRAMS) file: entry points are
             # generated executable and cannot hit the permission bug of 2026-08-24.
             'detector_node = trainit_perception.nodes.detector_node:main',
+            'surface_grasp_node = trainit_perception.nodes.surface_grasp_node:main',
+            'scripted_grasp_node = trainit_perception.nodes.scripted_grasp_node:main',
         ],
     },
 )

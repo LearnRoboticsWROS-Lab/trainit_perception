@@ -35,7 +35,7 @@ class Detection:
     """
     class_id: str
     score: float                                  # 0..1, detector-specific meaning
-    position: Tuple[float, float, float]          # metres
+    position: Optional[Tuple[float, float, float]]   # metres; None only from a segmentation-only `components()`
     size: Tuple[float, float, float] = (0.0, 0.0, 0.0)   # metres, approximate; 0 = unknown
     pixel: Tuple[float, float] = (0.0, 0.0)       # (u, v) centroid, for the tuner / debug
     area_px: int = 0
@@ -52,6 +52,10 @@ class Detection:
     # The candidate TERMS ride here, and they are PUBLISHED: `msgs.to_quality_payload` sends this
     # dict on the quality sidecar in the same permutation as the detections (ADR-0017 Decision 5).
     extra: Dict[str, float] = field(default_factory=dict)
+    # The detection's own pixels (H x W bool), when the method segments: the 2-D evidence a
+    # SURFACE-GRASP provider fits its surface on (vNext M4, `trainit_perception.grasp`). Never
+    # published: neither vision_msgs nor the quality sidecar carries it.
+    mask: Optional[np.ndarray] = field(default=None, repr=False, compare=False)
 
 
 class Detector(ABC):
