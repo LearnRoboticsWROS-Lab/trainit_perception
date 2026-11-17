@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>trainit_perception</name>
-  <version>0.5.0</version>
+  <version>0.8.0</version>
   <description>
     TrainIt perception: detectors that turn the camera contract (image + depth +
     intrinsics) into the perception contract (vision_msgs/Detection3DArray). Each
@@ -14,7 +14,12 @@
     second repo (ADR-0018). The configuration vocabulary -- methods, rules, terms,
     faces, parameter schema, version floors -- is exported by
     trainit_perception.vocabulary.export(); the Setup Assistant commits a snapshot
-    of it and never imports this package while it generates (ADR-0021).
+    of it and never imports this package while it generates (ADR-0021). Since 0.6.0 it
+    is also a GRASP PROVIDER: SurfaceGrasp (tp.surface_grasp) turns the measured surface
+    into ranked, constrained trainit_interfaces/GraspCandidate[] with explicit rejection
+    codes (ADR-0026, vNext M4). Since 0.7.0 SurfaceGrasp can segment from an external
+    segmenter's instance image (instance_topic), filters regions by a workspace polygon
+    (eligibility), and a scripted provider (tp.scripted) serves mock product tests.
   </description>
   <maintainer email="ros.master.ai@gmail.com">fra</maintainer>
   <license>Apache-2.0</license>
@@ -25,6 +30,9 @@
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>std_srvs</exec_depend>
+  <exec_depend>diagnostic_msgs</exec_depend>
+  <exec_depend>visualization_msgs</exec_depend>
+  <exec_depend>trainit_interfaces</exec_depend>
   <exec_depend>cv_bridge</exec_depend>
   <exec_depend>message_filters</exec_depend>
   <exec_depend>python3-opencv</exec_depend>

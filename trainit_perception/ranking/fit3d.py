@@ -83,8 +83,14 @@ def _face(face: Optional[GraspFace]) -> GraspFace:
 
 
 def _points(mask: np.ndarray, depth_m: np.ndarray, K: np.ndarray,
-            z_min: float, z_max: float) -> Tuple[np.ndarray, float]:
-    """Back-project the valid depth inside the mask. Returns (N x 3 points, depth coverage)."""
+            z_min: float, z_max: float, rays: Optional[np.ndarray] = None) -> Tuple[np.ndarray, float]:
+    """Back-project the valid depth inside the mask. Returns (N x 3 points, depth coverage).
+
+    `rays` (H x W x 2, optional) is the UNDISTORTED normalised image coordinate (x, y) of every
+    pixel, so P = z * (x, y, 1). Without it the pinhole of K is used, which is exact only for a
+    camera with no lens distortion (Isaac). A real lens (a RealSense's plumb_bob D) needs the rays:
+    ignoring D is a ~1 % lateral error at mid-field (vNext M4, `grasp.camera.CameraModel`).
+    """
     v, u = np.nonzero(mask)
     if not len(u):
         return np.zeros((0, 3)), 0.0
@@ -92,6 +98,9 @@ def _points(mask: np.ndarray, depth_m: np.ndarray, K: np.ndarray,
     good = np.isfinite(z) & (z > z_min) & (z < z_max)
     coverage = float(good.mean())
     u, v, z = u[good], v[good], z[good]
+    if rays is not None:
+        xy = rays[v, u]
+        return np.stack([xy[:, 0] * z, xy[:, 1] * z, z], 1), coverage
     fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
     return np.stack([(u - cx) * z / fx, (v - cy) * z / fy, z], 1), coverage
 
@@ -136,7 +145,7 @@ def centroid(mask: np.ndarray, depth_m: np.ndarray, K: np.ndarray, *,
 def plane_ransac(mask: np.ndarray, depth_m: np.ndarray, K: np.ndarray, *,
                  face: Optional[GraspFace] = None, z_min: float = 0.05, z_max: float = 3.0,
                  min_points: int = 50, iters: int = 120, inlier_mm: float = 2.0,
-                 seed: int = 0, **_) -> GraspFit:
+                 seed: int = 0, rays: Optional[np.ndarray] = None, **_) -> GraspFit:
     """Fit a plane to the masked surface: grasp point on the plane, normal from the plane.
 
     RANSAC rather than a plain least-squares fit because a mask always leaks: a few pixels of the
@@ -148,8 +157,18 @@ def plane_ransac(mask: np.ndarray, depth_m: np.ndarray, K: np.ndarray, *,
     of the surface rather than the centre of the pixels that happened to have depth.
     """
     _refuse_face_params(_)
+    P, cov = _points(mask, depth_m, K, z_min, z_max, rays)
+    return plane_ransac_points(P, cov, face=face, min_points=min_points, iters=iters,
+                               inlier_mm=inlier_mm, seed=seed)
+
+
+def plane_ransac_points(P: np.ndarray, cov: float, *, face: Optional[GraspFace] = None,
+                        min_points: int = 50, iters: int = 120, inlier_mm: float = 2.0,
+                        seed: int = 0) -> GraspFit:
+    """`plane_ransac` on points already back-projected (N x 3, the optical frame) -- the half a
+    caller with its own camera model (lens distortion, vNext M4) shares. `cov` is the depth
+    coverage the caller measured. Deterministic: the RANSAC draws come from `seed`."""
     f = _face(face)
-    P, cov = _points(mask, depth_m, K, z_min, z_max)
     if len(P) < min_points:
         return GraspFit((0, 0, 0), (0, 0, -1), ok=False,
                         why=f'only {len(P)} valid depth points in the mask (need {min_points})',
@@ -272,7 +291,8 @@ def fit(method: str, mask: np.ndarray, depth_m: np.ndarray, K: np.ndarray, **par
 def approach_obstruction(fit: GraspFit, depth_m: np.ndarray, K: np.ndarray, *,
                          tool_radius_m: float, inlier_mm: float = 2.0, max_h_m: float = 0.050,
                          min_pixels: int = 8, pct: float = 95.0, noise_k: float = 3.0,
-                         z_min: float = 0.05, z_max: float = 3.0) -> float:
+                         z_min: float = 0.05, z_max: float = 3.0,
+                         rays: Optional[np.ndarray] = None) -> float:
     """How far anything NOT on this surface stands into the tool's path, in mm.
 
     0 is CLEAR and **NaN is "cannot tell"** -- they are different answers and the difference
@@ -335,6 +355,18 @@ def approach_obstruction(fit: GraspFit, depth_m: np.ndarray, K: np.ndarray, *,
     rv = int(np.ceil(fy * (extent / z_near + abs(p0[1]) * par))) + 2
     uc, vc = int(round(fx * p0[0] / p0[2] + cx)), int(round(fy * p0[1] / p0[2] + cy))
     h_img, w_img = d.shape[:2]
+    if rays is not None:
+        # a distorted lens images the axis elsewhere than the pinhole says: the pixel whose ray is
+        # nearest to the grasp point's, searched about the pinhole guess (distortion moves a pixel
+        # by a few percent of its radius, far less than this window)
+        r = 24
+        a0, a1 = max(0, uc - r), min(w_img, uc + r + 1)
+        b0, b1 = max(0, vc - r), min(h_img, vc + r + 1)
+        if a0 < a1 and b0 < b1:
+            win = rays[b0:b1, a0:a1]
+            err = (win[..., 0] - p0[0] / p0[2]) ** 2 + (win[..., 1] - p0[1] / p0[2]) ** 2
+            j, i = np.unravel_index(int(np.argmin(err)), err.shape)
+            uc, vc = a0 + int(i), b0 + int(j)
     u0, u1 = max(0, uc - ru), min(w_img, uc + ru + 1)
     v0, v1 = max(0, vc - rv), min(h_img, vc + rv + 1)
     if u0 >= u1 or v0 >= v1:
@@ -346,8 +378,13 @@ def approach_obstruction(fit: GraspFit, depth_m: np.ndarray, K: np.ndarray, *,
         return float('nan')                         # nothing to look at: no idea
     vv, uu = np.nonzero(good)
     zz = z[vv, uu]
-    dx = (uu + u0 - cx) * zz / fx - p0[0]
-    dy = (vv + v0 - cy) * zz / fy - p0[1]
+    if rays is not None:                            # the undistorted rays of a real lens (M4)
+        xy = rays[vv + v0, uu + u0]
+        dx = xy[:, 0] * zz - p0[0]
+        dy = xy[:, 1] * zz - p0[1]
+    else:
+        dx = (uu + u0 - cx) * zz / fx - p0[0]
+        dy = (vv + v0 - cy) * zz / fy - p0[1]
     dz = zz - p0[2]
     h = dx * n[0] + dy * n[1] + dz * n[2]           # > 0: on the camera's side of the grasp plane
     # perpendicular distance to the axis, without forming the difference vectors:

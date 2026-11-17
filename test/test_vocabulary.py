@@ -36,7 +36,8 @@ from trainit_perception.ranking import rules as R
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TOP = ['schema_version', 'trainit_perception', 'provides', 'detector_methods', 'auto', 'rules',
-       'default_preference', 'terms', 'faces', 'default_face', 'face_size_band_m', 'param_since']
+       'default_preference', 'terms', 'faces', 'default_face', 'face_size_band_m', 'param_since',
+       'grasp_providers']
 TOKEN = re.compile(r'^[a-z][a-z0-9_]*$')
 VERSION = re.compile(r'^\d+\.\d+\.\d+$')
 PROVIDES_ALL = (R.PROVIDES_SCORE, R.PROVIDES_BOX, R.PROVIDES_MASK_AREA, R.PROVIDES_FIT3D)
@@ -67,6 +68,29 @@ def test_the_record_is_schema_1_with_exactly_these_keys(record):
         assert list(req) == ['provides', 'positive_params', 'face_sized'], name
     for name, face in record['faces'].items():
         assert list(face) == ['params', 'enables_terms'], name
+    # vNext M4: the grasp providers (a node of their own, publishing GraspCandidateArray); M4.5 adds the
+    # segmentation sources' and the eligibility's dated schema sections
+    for name, prov in record['grasp_providers'].items():
+        assert list(prov) == ['node', 'produces', 'grasp_modes', 'segmentation_methods', 'segmentation_parameters',
+                              'eligibility', 'parameters', 'since'], name
+        assert prov['produces'] == 'grasp_candidates', name
+        for key, row in _provider_rows(prov):
+            assert {'type'} <= set(row) <= {'type', 'default', 'min', 'max', 'choices', 'required'}, (name, key)
+            assert row['type'] in ('str', 'int', 'float', 'vec3', 'str_list', 'polygon_px'), (name, key)
+            assert ('default' in row) != bool(row.get('required')) or re.match(
+                r'^(pose_quality_|min_|tool_)', key), (name, key)
+        for sec in list(prov['segmentation_parameters'].values()) + ([prov['eligibility']] if prov['eligibility']
+                                                                     else []):
+            assert list(sec) == ['parameters', 'since'] and VERSION.match(sec['since']), name
+
+
+def _provider_rows(prov):
+    """Every parameter row of a provider: its own, each segmentation source's, its eligibility's."""
+    yield from prov['parameters'].items()
+    for sec in prov['segmentation_parameters'].values():
+        yield from sec['parameters'].items()
+    if prov['eligibility']:
+        yield from prov['eligibility']['parameters'].items()
 
 
 # --- 2. the boundary ----------------------------------------------------------------------------
@@ -86,6 +110,15 @@ def _leaves(node, path=()):
 def _number_allowed(path):
     if path in (('schema_version',),) or path[:1] == ('face_size_band_m',):
         return True
+    if (len(path) >= 5 and path[0] == 'grasp_providers' and path[2] == 'parameters'
+            and path[4] in ('default', 'min', 'max')):
+        return True
+    if (len(path) >= 6 and path[0] == 'grasp_providers' and path[2] == 'eligibility' and path[3] == 'parameters'
+            and path[5] in ('default', 'min', 'max')):
+        return True
+    if (len(path) >= 7 and path[0] == 'grasp_providers' and path[2] == 'segmentation_parameters'
+            and path[4] == 'parameters' and path[6] in ('default', 'min', 'max')):
+        return True
     return (len(path) >= 5 and path[0] == 'detector_methods' and path[2] == 'parameters'
             and path[4] in ('default', 'min', 'max'))
 
@@ -93,7 +126,8 @@ def _number_allowed(path):
 def test_every_string_is_a_name_or_a_release_and_numbers_sit_only_in_a_schema(record):
     for path, value in _leaves(record):
         if isinstance(value, bool):
-            assert path[0] == 'terms' and path[-1] == 'face_sized', path
+            assert ((path[0] == 'terms' and path[-1] == 'face_sized')
+                    or (path[0] == 'grasp_providers' and path[-1] == 'required' and value is True)), path
         elif isinstance(value, (int, float)):
             assert _number_allowed(path), (path, value)
         elif isinstance(value, str):
@@ -109,6 +143,10 @@ def test_no_prose_no_complement_and_no_gate_or_tool_default_crosses(record):
     for name, method in record['detector_methods'].items():
         for key in method['parameters'] or ():
             assert not re.match(r'^(pose_quality_|min_pose_quality|tool_)', key), (name, key)
+    for name, prov in record['grasp_providers'].items():       # their names cross, never their values
+        for key, row in _provider_rows(prov):
+            if re.match(r'^(pose_quality_|min_|tool_)', key) or row.get('required'):
+                assert 'default' not in row, (name, key)
     for rule in R.BUILTIN_RULES:
         assert record['rules'][rule.name] == list(rule.factors)        # names only, in order
 
@@ -318,3 +356,48 @@ def test_a_floor_two_tables_disagree_on_stops_the_export(monkeypatch):
     monkeypatch.setitem(RK.PARAM_SINCE, 'blur_px', '0.1.0')
     with pytest.raises(ValueError, match=r"'blur_px' is dated 0\.2\.0 by its method and 0\.1\.0"):
         vocabulary.export()
+
+
+# --- 8. vNext M4.5: the instance_topic source, the eligibility schema, the scripted provider ----------------------
+
+def test_the_m45_sections_are_the_code_tables_and_every_new_parameter_is_dated_0_7_0(record):
+    from trainit_perception.grasp import eligibility as EL
+    from trainit_perception.grasp import instances as INST
+    from trainit_perception.grasp import scripted as SC
+    for table in (INST.PARAMETERS, EL.PARAMETERS, SC.PARAMETERS):
+        assert all(schema.get('since') == '0.7.0' for schema in table.values())
+    sg = record['grasp_providers']['surface_grasp']
+    assert sg['since'] == '0.6.0'
+    assert sg['segmentation_methods'] == ['color_mask', 'instance_topic']
+    source = sg['segmentation_parameters']['instance_topic']
+    assert list(source['parameters']) == list(INST.PARAMETERS) and source['since'] == '0.7.0'
+    assert source['parameters']['source'] == {'type': 'str', 'required': True}
+    assert 'default' not in source['parameters']['min_score']           # a gate crosses without its value
+    assert list(sg['eligibility']['parameters']) == list(EL.PARAMETERS) and sg['eligibility']['since'] == '0.7.0'
+    assert sg['eligibility']['parameters']['roi_px'] == {'type': 'polygon_px', 'required': True}
+    sc = record['grasp_providers']['scripted_grasp']
+    assert (sc['node'], sc['since'], sc['grasp_modes']) == ('scripted_grasp_node', '0.7.0', ['any'])
+    assert sc['segmentation_methods'] == [] and sc['segmentation_parameters'] == {} and sc['eligibility'] == {}
+    assert list(sc['parameters']) == list(SC.PARAMETERS)
+    assert sc['parameters']['after_end'] == {'type': 'str', 'choices': ['empty', 'repeat_last'], 'default': 'empty'}
+    # the provider-level names never enter the FLAT floors: `max_objects` is also the colour mask's (undated)
+    assert not set(record['param_since']) & {'source', 'classes', 'roi_px', 'min_inside', 'scenario_file'}
+
+
+@pytest.mark.parametrize('break_it, says', [
+    (lambda r: r['grasp_providers']['surface_grasp']['segmentation_methods'].append('nope'),
+     "'nope' is neither a detector that exposes masks nor a declared segmentation source"),
+    (lambda r: r['grasp_providers']['surface_grasp']['segmentation_methods'].remove('instance_topic'),
+     "segmentation source 'instance_topic' is not in its segmentation_methods"),
+    (lambda r: r['grasp_providers']['surface_grasp']['eligibility'].update(since='soon'),
+     'eligibility is not {parameters, since} dated with a release'),
+    (lambda r: r['grasp_providers']['scripted_grasp'].update(eligibility={'parameters': {}, 'since': '0.7.0'}),
+     'but a segmentation or eligibility schema'),
+    (lambda r: r['grasp_providers']['scripted_grasp'].pop('eligibility'), 'has the keys'),
+], ids=['unknown_segmentation', 'undeclared_source', 'undated_eligibility', 'eligibility_without_images',
+        'row_keys'])
+def test_a_broken_m45_provider_row_is_named(record, break_it, says):
+    broken = copy.deepcopy(record)
+    break_it(broken)
+    problems = vocabulary.consistency_problems(broken)
+    assert any(says in p for p in problems), problems

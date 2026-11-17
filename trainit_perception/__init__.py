@@ -4,4 +4,4 @@
 the three together): the Setup Assistant records it with its snapshot of this package's
 configuration vocabulary (``trainit_perception.vocabulary``, ADR-0021).
 """
-__version__ = '0.5.0'
+__version__ = '0.8.0'

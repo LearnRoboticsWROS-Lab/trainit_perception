@@ -25,7 +25,8 @@ from .faces import (CylinderSideFace, DiscFace, FACES, GraspFace, MAX_FACE_M,  #
                     face_schema, face_size_m, faces_schema, make_face, mad_extent, p90_extent,
                     register_face)
 from .fit3d import (GIVES_ORIENTATION, GraspFit, METHODS, approach_obstruction,  # noqa: F401
-                    available_methods_3d, centroid, fit, plane_nearest, plane_ransac)
+                    available_methods_3d, centroid, fit, plane_nearest, plane_ransac,
+                    plane_ransac_points)
 from .ranker import PARAM_SINCE, Ranker, param_since, ranking_defaults  # noqa: F401
 from .rules import (AUTO, DEFAULT_PREFERENCE, PROVIDES_BOX, PROVIDES_FIT3D,  # noqa: F401
                     PROVIDES_MASK_AREA, PROVIDES_SCORE, RULES, Rule, TERM_NEEDS, available_rules,
